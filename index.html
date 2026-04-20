@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scopa — Tableau des scores</title>
+<!-- Firebase SDK (modular, via CDN) -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch } 
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  
+  // Expose pour usage dans le script principal
+  window._firebase = { initializeApp, getFirestore, collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch };
+  window.dispatchEvent(new Event('firebase-sdk-ready'));
+</script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f2818;
+    --felt: #14532d;
+    --felt-light: #1a6b3a;
+    --gold: #d4af37;
+    --gold-light: #f4d76e;
+    --cream: #f5e9d3;
+    --red: #c0392b;
+    --text: #f5e9d3;
+    --shadow: rgba(0,0,0,0.4);
+  }
+  body {
+    font-family: Georgia, 'Times New Roman', serif;
+    background: radial-gradient(ellipse at center, var(--felt-light) 0%, var(--felt) 50%, var(--bg) 100%);
+    min-height: 100vh;
+    color: var(--text);
+    padding: 16px;
+    padding-bottom: 40px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header {
+    text-align: center;
+    padding: 20px 0 24px;
+    border-bottom: 2px solid var(--gold);
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: clamp(28px, 6vw, 44px);
+    color: var(--gold);
+    letter-spacing: 3px;
+    text-shadow: 2px 2px 4px var(--shadow);
+    font-style: italic;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: var(--cream);
+    opacity: 0.8;
+    margin-top: 6px;
+    letter-spacing: 2px;
+  }
+
+  /* Setup */
+  .setup-panel {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--gold);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+  }
+  .setup-panel label { font-size: 14px; color: var(--cream); }
+  .setup-panel input, .setup-panel select {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid var(--gold);
+    color: var(--cream);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 14px;
+  }
+  .setup-panel input:focus, .setup-panel select:focus { outline: 2px solid var(--gold-light); }
+  .btn {
+    background: var(--gold);
+    color: var(--bg);
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 14px;
+    letter-spacing: 1px;
+    transition: transform 0.1s, background 0.2s;
+  }
+  .btn:hover { background: var(--gold-light); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn-secondary { background: transparent; color: var(--gold); border: 1px solid var(--gold); }
+  .btn-secondary:hover { background: rgba(212, 175, 55, 0.15); color: var(--gold-light); }
+  .btn-danger { background: var(--red); color: white; }
+  .btn-danger:hover { background: #e74c3c; }
+
+  /* Players */
+  .players-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .player-card {
+    background: linear-gradient(135deg, rgba(20,83,45,0.7), rgba(15,40,24,0.9));
+    border: 2px solid var(--gold);
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 6px 14px var(--shadow);
+    position: relative;
+  }
+  .player-card.leader { border-color: var(--gold-light); box-shadow: 0 0 20px rgba(244, 215, 110, 0.4); }
+  .player-card.leader::before {
+    content: "👑";
+    position: absolute;
+    top: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 22px;
+  }
+  .player-name-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    position: relative;
+  }
+  .player-name {
+    font-size: 20px;
+    color: var(--gold);
+    text-align: center;
+    font-style: italic;
+    background: rgba(255,255,255,0.05);
+    border: 1px dashed rgba(212, 175, 55, 0.4);
+    border-radius: 6px;
+    padding: 4px 10px;
+    width: 100%;
+    max-width: 220px;
+    font-family: inherit;
+    cursor: text;
+    transition: all 0.2s;
+  }
+  .player-name:hover { background: rgba(212, 175, 55, 0.15); border-style: solid; }
+  .player-name:focus {
+    outline: none;
+    border: 1px solid var(--gold-light);
+    background: rgba(212, 175, 55, 0.2);
+    box-shadow: 0 0 8px rgba(244, 215, 110, 0.3);
+  }
+  .edit-hint {
+    position: absolute;
+    right: -4px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 12px;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .player-total {
+    text-align: center;
+    font-size: 52px;
+    font-weight: bold;
+    color: var(--cream);
+    margin: 6px 0 12px;
+    text-shadow: 2px 2px 4px var(--shadow);
+    line-height: 1;
+  }
+  .player-total-label {
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--gold);
+    opacity: 0.8;
+    margin-bottom: 10px;
+  }
+  .round-breakdown {
+    font-size: 12px;
+    color: var(--cream);
+    opacity: 0.75;
+    text-align: center;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(212, 175, 55, 0.3);
+  }
+
+  /* Current round */
+  .current-round {
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--gold);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .round-title {
+    text-align: center;
+    font-size: 22px;
+    color: var(--gold);
+    margin-bottom: 18px;
+    font-style: italic;
+    letter-spacing: 2px;
+  }
+  .scoring-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+  }
+  .scoring-table th, .scoring-table td {
+    padding: 10px 8px;
+    text-align: center;
+    border-bottom: 1px solid rgba(212, 175, 55, 0.2);
+  }
+  .scoring-table th {
+    color: var(--gold);
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-weight: normal;
+    background: rgba(0,0,0,0.3);
+  }
+  .scoring-table th:first-child, .scoring-table td:first-child {
+    text-align: left;
+    font-weight: bold;
+  }
+  .category-name { color: var(--cream); }
+  .category-desc {
+    font-size: 11px;
+    color: var(--cream);
+    opacity: 0.6;
+    font-weight: normal;
+    font-style: italic;
+  }
+  .check-cell { position: relative; }
+  .check-box {
+    width: 30px;
+    height: 30px;
+    border: 2px solid var(--gold);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.05);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    font-size: 18px;
+  }
+  .check-box:hover { background: rgba(212, 175, 55, 0.2); }
+  .check-box.checked {
+    background: var(--gold);
+    color: var(--bg);
+  }
+  .scopa-counter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .scopa-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--gold);
+    background: rgba(255,255,255,0.05);
+    color: var(--gold);
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .scopa-btn:hover { background: var(--gold); color: var(--bg); }
+  .scopa-value {
+    display: inline-block;
+    min-width: 28px;
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--cream);
+  }
+  .round-points {
+    color: var(--gold-light);
+    font-size: 18px;
+    font-weight: bold;
+  }
+  .round-total-row {
+    background: rgba(212, 175, 55, 0.1);
+    font-size: 16px;
+  }
+  .round-total-row td { padding: 14px 8px; }
+  .action-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 14px;
+  }
+
+  /* History */
+  .history {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(212, 175, 55, 0.5);
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 20px;
+  }
+  .history h2 {
+    color: var(--gold);
+    font-size: 18px;
+    margin-bottom: 12px;
+    font-style: italic;
+    letter-spacing: 1px;
+  }
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .history-table th, .history-table td {
+    padding: 8px;
+    text-align: center;
+    border-bottom: 1px solid rgba(212, 175, 55, 0.15);
+  }
+  .history-table th { color: var(--gold); font-weight: normal; font-size: 12px; letter-spacing: 1px; }
+  .history-empty { text-align: center; opacity: 0.6; padding: 16px; font-style: italic; }
+
+  /* Winner banner */
+  .winner-banner {
+    background: linear-gradient(135deg, var(--gold), var(--gold-light));
+    color: var(--bg);
+    padding: 20px;
+    border-radius: 14px;
+    text-align: center;
+    margin-bottom: 20px;
+    font-size: 22px;
+    font-weight: bold;
+    font-style: italic;
+    letter-spacing: 2px;
+    box-shadow: 0 0 30px rgba(244, 215, 110, 0.5);
+    animation: shimmer 2s infinite;
+  }
+  @keyframes shimmer {
+    0%, 100% { box-shadow: 0 0 30px rgba(244, 215, 110, 0.5); }
+    50% { box-shadow: 0 0 50px rgba(244, 215, 110, 0.8); }
+  }
+
+  /* Games history */
+  .games-history {
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--gold);
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 20px;
+  }
+  .games-history h2 {
+    color: var(--gold);
+    font-size: 20px;
+    margin-bottom: 14px;
+    font-style: italic;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .games-filter {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .filter-chip {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(212, 175, 55, 0.4);
+    color: var(--cream);
+    padding: 6px 12px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .filter-chip:hover { background: rgba(212, 175, 55, 0.15); }
+  .filter-chip.active {
+    background: var(--gold);
+    color: var(--bg);
+    border-color: var(--gold);
+    font-weight: bold;
+  }
+  .game-entry {
+    background: rgba(20, 83, 45, 0.3);
+    border: 1px solid rgba(212, 175, 55, 0.25);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: center;
+  }
+  .game-entry.is-winner-row { border-color: rgba(244, 215, 110, 0.5); }
+  .game-date {
+    font-size: 12px;
+    color: var(--cream);
+    opacity: 0.7;
+    margin-bottom: 4px;
+    letter-spacing: 1px;
+  }
+  .game-matchup {
+    font-size: 15px;
+    color: var(--cream);
+    line-height: 1.5;
+  }
+  .game-matchup .vs {
+    color: var(--gold);
+    font-style: italic;
+    margin: 0 6px;
+    opacity: 0.7;
+  }
+  .game-matchup .winner {
+    color: var(--gold-light);
+    font-weight: bold;
+  }
+  .game-matchup .winner::before { content: "🏆 "; }
+  .game-score {
+    font-size: 14px;
+    color: var(--cream);
+    opacity: 0.8;
+    margin-top: 4px;
+  }
+  .game-meta {
+    font-size: 11px;
+    color: var(--cream);
+    opacity: 0.55;
+    margin-top: 4px;
+    letter-spacing: 0.5px;
+  }
+  .game-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stats-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .stat-box {
+    background: rgba(212, 175, 55, 0.08);
+    border: 1px solid rgba(212, 175, 55, 0.3);
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--gold);
+  }
+  .stat-label {
+    font-size: 11px;
+    color: var(--cream);
+    opacity: 0.75;
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+  .games-empty {
+    text-align: center;
+    padding: 24px;
+    font-style: italic;
+    opacity: 0.6;
+  }
+
+  /* Rules panel */
+  details {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(212, 175, 55, 0.4);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-top: 16px;
+  }
+  summary {
+    color: var(--gold);
+    cursor: pointer;
+    font-style: italic;
+    letter-spacing: 1px;
+    user-select: none;
+  }
+  details[open] summary { margin-bottom: 10px; }
+  .rules-content { font-size: 14px; line-height: 1.6; color: var(--cream); }
+  .rules-content strong { color: var(--gold); }
+  .rules-content ul { padding-left: 20px; margin: 8px 0; }
+
+  /* Mobile */
+  @media (max-width: 600px) {
+    .scoring-table th, .scoring-table td { padding: 8px 4px; font-size: 13px; }
+    .category-desc { display: none; }
+    .player-total { font-size: 42px; }
+    .setup-panel { flex-direction: column; align-items: stretch; }
+    .setup-panel input, .setup-panel select, .btn { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>SCOPA</h1>
+    <div class="subtitle">· TABLEAU DES SCORES ·</div>
+  </header>
+
+  <div class="setup-panel" id="setupPanel">
+    <label>Joueurs :
+      <select id="numPlayers">
+        <option value="2">2 joueurs</option>
+        <option value="3">3 joueurs</option>
+        <option value="4">4 joueurs (équipes)</option>
+      </select>
+    </label>
+    <label>Score cible :
+      <select id="targetScore">
+        <option value="11" selected>11 points</option>
+        <option value="16">16 points</option>
+        <option value="21">21 points</option>
+      </select>
+    </label>
+    <button class="btn" id="startBtn">Commencer la partie</button>
+    <button class="btn btn-secondary" id="resetBtn">Réinitialiser</button>
+  </div>
+
+  <div id="winnerBanner"></div>
+  <div class="players-grid" id="playersGrid"></div>
+  <div class="current-round" id="currentRound"></div>
+  <div class="history" id="historyPanel"></div>
+  <div class="games-history" id="gamesHistory"></div>
+
+  <details>
+    <summary>📖 Règles de comptage</summary>
+    <div class="rules-content">
+      <p>À la fin de chaque manche, on attribue <strong>4 points principaux</strong> (1 point par catégorie) :</p>
+      <ul>
+        <li><strong>Cartes</strong> — le joueur/équipe qui a le plus de cartes</li>
+        <li><strong>Denari</strong> — le plus de cartes de deniers (carreaux)</li>
+        <li><strong>Settebello</strong> — celui qui a le 7 de deniers</li>
+        <li><strong>Primiera</strong> — meilleure combinaison (meilleure carte de chaque couleur, avec valeurs spéciales : 7=21, 6=18, As=16, 5=15, 4=14, 3=13, 2=12, figures=10)</li>
+      </ul>
+      <p>En cas d'égalité (sauf pour le settebello), <strong>aucun point n'est attribué</strong>.</p>
+      <p>À cela s'ajoute <strong>1 point par Scopa</strong> (balai — quand on ramasse toutes les cartes de la table en un coup).</p>
+      <p>La partie se termine à la fin d'une manche, quand un joueur/équipe atteint le score cible (11, 16 ou 21).</p>
+    </div>
+  </details>
+</div>
+
+<script>
+const STORAGE_KEY = 'scopa-scoreboard-v1';
+
+// ============================================
+// CONFIGURATION FIREBASE
+// Remplace firebaseConfig par la config de TON projet Firebase
+// (console.firebase.google.com > Paramètres du projet > Tes applications)
+// ============================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCAPuRThSGlb15DTycSGWpRsOoNX-hUmc8",
+  authDomain: "scopa-a5441.firebaseapp.com",
+  projectId: "scopa-a5441",
+  storageBucket: "scopa-a5441.firebasestorage.app",
+  messagingSenderId: "616977453573",
+  appId: "1:616977453573:web:dc48edee2424fb946ec26c",
+  measurementId: "G-CPNB3DJDF6"
+};
+// ============================================
+
+const COLLECTION_NAME = 'scopa_games';
+let firebaseApp = null;
+let firebaseDb = null;
+
+// Détection config valide
+const FIREBASE_CONFIGURED = !firebaseConfig.apiKey.includes('YOUR_API_KEY') && !firebaseConfig.projectId.includes('YOUR_PROJECT');
+
+let state = {
+  players: [],
+  targetScore: 11,
+  rounds: [],
+  currentRound: null,
+  gameStarted: false,
+  gameEnded: false,
+  gameSavedToHistory: false,
+  gameStartDate: null
+};
+
+let gamesHistory = [];
+let historyFilter = 'all';
+let historyLoading = false;
+let historyError = null;
+
+// Initialisation Firebase (attend que le SDK soit chargé)
+function initFirebase() {
+  if (!FIREBASE_CONFIGURED) {
+    historyError = 'Firebase non configuré. Modifie firebaseConfig dans le code avec les clés de ton projet.';
+    return false;
+  }
+  if (!window._firebase) {
+    return false;
+  }
+  try {
+    firebaseApp = window._firebase.initializeApp(firebaseConfig);
+    firebaseDb = window._firebase.getFirestore(firebaseApp);
+    return true;
+  } catch (e) {
+    historyError = 'Erreur d\'initialisation Firebase : ' + e.message;
+    return false;
+  }
+}
+
+const CATEGORIES = [
+  { key: 'cards', label: 'Cartes', desc: 'Le plus de cartes', type: 'check' },
+  { key: 'denari', label: 'Denari', desc: 'Le plus de deniers', type: 'check' },
+  { key: 'settebello', label: 'Settebello', desc: '7 de deniers', type: 'check' },
+  { key: 'primiera', label: 'Primiera', desc: 'Meilleure combinaison', type: 'check' },
+  { key: 'scopa', label: 'Scopa', desc: '1 pt par balai', type: 'counter' }
+];
+
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+}
+function load() {
+  try {
+    const s = localStorage.getItem(STORAGE_KEY);
+    if (s) state = JSON.parse(s);
+  } catch(e) {}
+}
+
+// ============================================
+// FIRESTORE : historique des parties
+// ============================================
+async function fetchGamesHistory() {
+  if (!FIREBASE_CONFIGURED) {
+    historyError = 'Firebase non configuré. Modifie firebaseConfig dans le code.';
+    historyLoading = false;
+    renderGamesHistory();
+    return;
+  }
+  if (!firebaseDb && !initFirebase()) {
+    historyLoading = false;
+    renderGamesHistory();
+    return;
+  }
+  historyLoading = true;
+  historyError = null;
+  renderGamesHistory();
+  try {
+    const { collection, getDocs, query, orderBy, limit } = window._firebase;
+    const q = query(
+      collection(firebaseDb, COLLECTION_NAME),
+      orderBy('end_date', 'desc'),
+      limit(200)
+    );
+    const snapshot = await getDocs(q);
+    gamesHistory = [];
+    snapshot.forEach(docSnap => {
+      const row = docSnap.data();
+      gamesHistory.push({
+        id: docSnap.id,
+        game_uuid: row.game_uuid,
+        date: row.start_date,
+        endDate: row.end_date,
+        numPlayers: row.num_players,
+        mode: row.mode,
+        players: row.players,
+        scores: row.scores,
+        winnerIdx: row.winner_idx,
+        winnerName: row.winner_name,
+        targetScore: row.target_score,
+        roundCount: row.round_count
+      });
+    });
+    historyLoading = false;
+    renderGamesHistory();
+  } catch (e) {
+    historyError = 'Erreur de chargement : ' + e.message;
+    historyLoading = false;
+    renderGamesHistory();
+  }
+}
+
+async function pushGameToFirebase(game) {
+  if (!FIREBASE_CONFIGURED) return false;
+  if (!firebaseDb && !initFirebase()) return false;
+  try {
+    const { collection, addDoc } = window._firebase;
+    const docData = {
+      game_uuid: game.game_uuid,
+      start_date: game.date,
+      end_date: game.endDate,
+      num_players: game.numPlayers,
+      mode: game.mode,
+      players: game.players,
+      scores: game.scores,
+      winner_idx: game.winnerIdx,
+      winner_name: game.winnerName,
+      target_score: game.targetScore,
+      round_count: game.roundCount,
+      created_at: new Date().toISOString()
+    };
+    const docRef = await addDoc(collection(firebaseDb, COLLECTION_NAME), docData);
+    // Ajouter en tête de liste locale pour affichage immédiat
+    gamesHistory.unshift({
+      id: docRef.id,
+      game_uuid: game.game_uuid,
+      date: game.date,
+      endDate: game.endDate,
+      numPlayers: game.numPlayers,
+      mode: game.mode,
+      players: game.players,
+      scores: game.scores,
+      winnerIdx: game.winnerIdx,
+      winnerName: game.winnerName,
+      targetScore: game.targetScore,
+      roundCount: game.roundCount
+    });
+    return true;
+  } catch (e) {
+    console.error('Erreur pushGameToFirebase:', e);
+    historyError = 'Erreur de sauvegarde : ' + e.message;
+    return false;
+  }
+}
+
+async function deleteGameFromFirebase(id) {
+  if (!FIREBASE_CONFIGURED) return false;
+  if (!firebaseDb && !initFirebase()) return false;
+  try {
+    const { deleteDoc, doc } = window._firebase;
+    await deleteDoc(doc(firebaseDb, COLLECTION_NAME, id));
+    return true;
+  } catch (e) {
+    console.error('Erreur deleteGameFromFirebase:', e);
+    return false;
+  }
+}
+
+function initCurrentRound() {
+  const round = {};
+  state.players.forEach((_, i) => {
+    round[i] = { cards: false, denari: false, settebello: false, primiera: false, scopa: 0 };
+  });
+  return round;
+}
+
+function calcRoundPoints(playerIdx, round) {
+  if (!round) return 0;
+  const r = round[playerIdx];
+  if (!r) return 0;
+  let pts = 0;
+  if (r.cards) pts++;
+  if (r.denari) pts++;
+  if (r.settebello) pts++;
+  if (r.primiera) pts++;
+  pts += r.scopa || 0;
+  return pts;
+}
+
+function calcPlayerTotal(playerIdx) {
+  return state.rounds.reduce((sum, r) => sum + calcRoundPoints(playerIdx, r), 0);
+}
+
+function getLeaders() {
+  const totals = state.players.map((_, i) => calcPlayerTotal(i));
+  const max = Math.max(...totals);
+  if (max === 0) return [];
+  return totals.map((t, i) => t === max ? i : -1).filter(i => i >= 0);
+}
+
+function startGame() {
+  const num = parseInt(document.getElementById('numPlayers').value);
+  const target = parseInt(document.getElementById('targetScore').value);
+  const defaultNames = num === 4
+    ? ['Équipe 1', 'Équipe 2']
+    : Array.from({length: num}, (_, i) => `Joueur ${i+1}`);
+  state = {
+    players: defaultNames,
+    targetScore: target,
+    rounds: [],
+    currentRound: null,
+    gameStarted: true,
+    gameEnded: false,
+    gameSavedToHistory: false,
+    gameStartDate: new Date().toISOString()
+  };
+  state.currentRound = initCurrentRound();
+  save();
+  render();
+}
+
+function resetAll() {
+  if (state.gameStarted && !state.gameEnded && !confirm('Réinitialiser la partie en cours ? Elle ne sera pas ajoutée à l\'historique.')) return;
+  state = { players: [], targetScore: 11, rounds: [], currentRound: null, gameStarted: false, gameEnded: false, gameSavedToHistory: false, gameStartDate: null };
+  save();
+  render();
+}
+
+async function saveGameToHistory() {
+  if (state.gameSavedToHistory) return;
+  const totals = state.players.map((_, i) => calcPlayerTotal(i));
+  const maxTotal = Math.max(...totals);
+  const winnerIdx = totals.indexOf(maxTotal);
+  const game = {
+    game_uuid: 'game_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    date: state.gameStartDate || new Date().toISOString(),
+    endDate: new Date().toISOString(),
+    numPlayers: state.players.length,
+    mode: state.players.length === 4 ? 'teams' : 'individual',
+    players: state.players.slice(),
+    scores: totals,
+    winnerIdx: winnerIdx,
+    winnerName: state.players[winnerIdx],
+    targetScore: state.targetScore,
+    roundCount: state.rounds.length
+  };
+  state.gameSavedToHistory = true;
+  save();
+  // Pousser sur Firebase
+  const success = await pushGameToFirebase(game);
+  if (!success) {
+    state.gameSavedToHistory = false;
+    save();
+    alert('La partie n\'a pas pu être sauvegardée en ligne. Vérifie ta connexion et la configuration Firebase.');
+  }
+  renderGamesHistory();
+}
+
+async function deleteGame(id) {
+  if (!confirm('Supprimer cette partie de l\'historique ?')) return;
+  const success = await deleteGameFromFirebase(id);
+  if (success) {
+    gamesHistory = gamesHistory.filter(g => g.id !== id);
+    renderGamesHistory();
+  } else {
+    alert('Erreur lors de la suppression.');
+  }
+}
+
+async function clearGamesHistory() {
+  if (!confirm('Effacer TOUT l\'historique des parties ? Cette action est irréversible et supprimera les parties pour TOUS les utilisateurs.')) return;
+  if (!FIREBASE_CONFIGURED || !firebaseDb) return;
+  try {
+    const { collection, getDocs, writeBatch, doc } = window._firebase;
+    const snapshot = await getDocs(collection(firebaseDb, COLLECTION_NAME));
+    // Firestore limite les batch à 500 opérations, on découpe si besoin
+    const docs = [];
+    snapshot.forEach(d => docs.push(d.id));
+    for (let i = 0; i < docs.length; i += 400) {
+      const batch = writeBatch(firebaseDb);
+      const chunk = docs.slice(i, i + 400);
+      chunk.forEach(id => batch.delete(doc(firebaseDb, COLLECTION_NAME, id)));
+      await batch.commit();
+    }
+    gamesHistory = [];
+    renderGamesHistory();
+  } catch (e) {
+    alert('Erreur : ' + e.message);
+  }
+}
+
+function setHistoryFilter(f) {
+  historyFilter = f;
+  render();
+}
+
+function toggleCheck(playerIdx, key) {
+  // For exclusive categories (cards, denari, settebello, primiera), only one player can have it
+  if (['cards','denari','settebello','primiera'].includes(key)) {
+    const wasChecked = state.currentRound[playerIdx][key];
+    // Uncheck for all others first
+    state.players.forEach((_, i) => { state.currentRound[i][key] = false; });
+    // Toggle this one (if it was checked, now it's unchecked = tie/no point)
+    state.currentRound[playerIdx][key] = !wasChecked;
+  } else {
+    state.currentRound[playerIdx][key] = !state.currentRound[playerIdx][key];
+  }
+  save();
+  render();
+}
+
+function changeScopa(playerIdx, delta) {
+  const cur = state.currentRound[playerIdx].scopa || 0;
+  state.currentRound[playerIdx].scopa = Math.max(0, cur + delta);
+  save();
+  render();
+}
+
+function validateRound() {
+  // Add current round to history
+  state.rounds.push(JSON.parse(JSON.stringify(state.currentRound)));
+  // Check if game is over
+  const totals = state.players.map((_, i) => calcPlayerTotal(i));
+  const maxTotal = Math.max(...totals);
+  if (maxTotal >= state.targetScore) {
+    // Check for tie
+    const leaders = totals.map((t, i) => t === maxTotal ? i : -1).filter(i => i >= 0);
+    if (leaders.length === 1) {
+      state.gameEnded = true;
+      saveGameToHistory();
+    }
+    // If tie, continue playing
+  }
+  state.currentRound = initCurrentRound();
+  save();
+  render();
+}
+
+function deleteRound(idx) {
+  if (!confirm('Supprimer cette manche ?')) return;
+  state.rounds.splice(idx, 1);
+  state.gameEnded = false;
+  save();
+  render();
+}
+
+function editPlayerName(idx, name, fullRerender) {
+  state.players[idx] = name.trim() || `Joueur ${idx+1}`;
+  save();
+  if (fullRerender) {
+    render();
+  } else {
+    // Live update : met à jour juste les en-têtes des tableaux sans refaire le focus
+    document.querySelectorAll('[data-player-header="'+idx+'"]').forEach(el => {
+      el.textContent = state.players[idx];
+    });
+  }
+}
+
+function render() {
+  const setupPanel = document.getElementById('setupPanel');
+  const playersGrid = document.getElementById('playersGrid');
+  const currentRoundDiv = document.getElementById('currentRound');
+  const historyPanel = document.getElementById('historyPanel');
+  const winnerBanner = document.getElementById('winnerBanner');
+
+  if (!state.gameStarted) {
+    playersGrid.innerHTML = '';
+    currentRoundDiv.innerHTML = '<p style="text-align:center;opacity:0.6;font-style:italic;padding:20px;">Choisis le nombre de joueurs et lance la partie ↑</p>';
+    historyPanel.innerHTML = '';
+    winnerBanner.innerHTML = '';
+    return;
+  }
+
+  // Winner banner
+  if (state.gameEnded) {
+    const leaders = getLeaders();
+    const winnerName = state.players[leaders[0]];
+    const finalScore = calcPlayerTotal(leaders[0]);
+    winnerBanner.innerHTML = `<div class="winner-banner">🏆 ${winnerName} remporte la partie avec ${finalScore} points !</div>`;
+  } else {
+    winnerBanner.innerHTML = '';
+  }
+
+  // Players grid
+  const leaders = getLeaders();
+  playersGrid.innerHTML = state.players.map((name, i) => {
+    const total = calcPlayerTotal(i);
+    const isLeader = leaders.includes(i) && total > 0;
+    const roundPts = state.rounds.map(r => calcRoundPoints(i, r));
+    const breakdown = roundPts.length > 0
+      ? `Manches : ${roundPts.join(' + ')}`
+      : 'Aucune manche jouée';
+    return `
+      <div class="player-card ${isLeader ? 'leader' : ''}">
+        <div class="player-name-wrap">
+          <input class="player-name" value="${escapeHtml(name)}" 
+                 onchange="editPlayerName(${i}, this.value, true)"
+                 oninput="editPlayerName(${i}, this.value, false)"
+                 title="Cliquer pour modifier le nom" />
+          <span class="edit-hint">✏️</span>
+        </div>
+        <div class="player-total-label">POINTS</div>
+        <div class="player-total">${total}</div>
+        <div class="round-breakdown">${breakdown}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Current round
+  if (!state.gameEnded) {
+    const roundNum = state.rounds.length + 1;
+    let tableHtml = `
+      <div class="round-title">Manche ${roundNum}</div>
+      <div style="overflow-x:auto;">
+      <table class="scoring-table">
+        <thead>
+          <tr>
+            <th>Catégorie</th>
+            ${state.players.map((p, i) => `<th data-player-header="${i}">${escapeHtml(p)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    CATEGORIES.forEach(cat => {
+      tableHtml += `<tr>
+        <td>
+          <div class="category-name">${cat.label}</div>
+          <div class="category-desc">${cat.desc}</div>
+        </td>`;
+      state.players.forEach((_, i) => {
+        if (cat.type === 'check') {
+          const checked = state.currentRound[i][cat.key];
+          tableHtml += `<td class="check-cell">
+            <div class="check-box ${checked ? 'checked' : ''}" onclick="toggleCheck(${i}, '${cat.key}')">${checked ? '✓' : ''}</div>
+          </td>`;
+        } else if (cat.type === 'counter') {
+          const val = state.currentRound[i].scopa || 0;
+          tableHtml += `<td>
+            <div class="scopa-counter">
+              <button class="scopa-btn" onclick="changeScopa(${i}, -1)">−</button>
+              <span class="scopa-value">${val}</span>
+              <button class="scopa-btn" onclick="changeScopa(${i}, 1)">+</button>
+            </div>
+          </td>`;
+        }
+      });
+      tableHtml += '</tr>';
+    });
+    // Totals row
+    tableHtml += `<tr class="round-total-row">
+      <td>Total de la manche</td>
+      ${state.players.map((_, i) => `<td class="round-points">${calcRoundPoints(i, state.currentRound)}</td>`).join('')}
+    </tr>`;
+    tableHtml += `</tbody></table></div>
+      <div class="action-row">
+        <button class="btn" onclick="validateRound()">✓ Valider la manche</button>
+      </div>
+      <p style="text-align:center;font-size:12px;opacity:0.6;margin-top:10px;font-style:italic;">
+        Les catégories Cartes / Denari / Settebello / Primiera sont exclusives : si personne n'a le point (égalité), laisse tout décoché.
+      </p>
+    `;
+    currentRoundDiv.innerHTML = tableHtml;
+  } else {
+    currentRoundDiv.innerHTML = `
+      <div style="text-align:center;padding:20px;">
+        <p style="margin-bottom:14px;">Partie terminée ! 🎉</p>
+        <button class="btn" onclick="resetAll()">Nouvelle partie</button>
+      </div>
+    `;
+  }
+
+  // History (manches de la partie en cours)
+  if (!state.gameStarted) {
+    historyPanel.innerHTML = '';
+  } else if (state.rounds.length === 0) {
+    historyPanel.innerHTML = '<h2>Historique des manches</h2><div class="history-empty">Aucune manche enregistrée</div>';
+  } else {
+    let h = `<h2>Historique des manches</h2><div style="overflow-x:auto;"><table class="history-table">
+      <thead><tr><th>Manche</th>${state.players.map((p, i) => `<th data-player-header="${i}">${escapeHtml(p)}</th>`).join('')}<th></th></tr></thead>
+      <tbody>`;
+    state.rounds.forEach((r, idx) => {
+      h += `<tr>
+        <td>${idx+1}</td>
+        ${state.players.map((_, i) => `<td>${calcRoundPoints(i, r)}</td>`).join('')}
+        <td><button class="scopa-btn" title="Supprimer" onclick="deleteRound(${idx})" style="color:var(--red);border-color:var(--red);">×</button></td>
+      </tr>`;
+    });
+    // Totals
+    h += `<tr style="background:rgba(212,175,55,0.15);font-weight:bold;">
+      <td>Total</td>
+      ${state.players.map((_, i) => `<td style="color:var(--gold-light);">${calcPlayerTotal(i)}</td>`).join('')}
+      <td></td>
+    </tr>`;
+    h += '</tbody></table></div>';
+    historyPanel.innerHTML = h;
+  }
+
+  // Historique des parties terminées
+  renderGamesHistory();
+}
+
+function renderGamesHistory() {
+  const el = document.getElementById('gamesHistory');
+  if (!el) return;
+
+  // En-tête avec bouton refresh + clear
+  let headerHtml = `<h2>
+    🏆 Historique des parties
+    <span style="display:flex;gap:8px;">
+      <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" onclick="fetchGamesHistory()" title="Rafraîchir">🔄</button>
+      ${gamesHistory.length > 0 ? '<button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" onclick="clearGamesHistory()">Effacer tout</button>' : ''}
+    </span>
+  </h2>`;
+
+  // État loading
+  if (historyLoading) {
+    el.innerHTML = headerHtml + '<div class="games-empty">⏳ Chargement de l\'historique...</div>';
+    return;
+  }
+
+  // État erreur
+  if (historyError) {
+    el.innerHTML = headerHtml + `<div class="games-empty" style="color:#e74c3c;">⚠️ ${escapeHtml(historyError)}</div>`;
+    return;
+  }
+
+  // Filtrage
+  const filtered = gamesHistory.filter(g => {
+    if (historyFilter === 'all') return true;
+    if (historyFilter === '2p') return g.numPlayers === 2;
+    if (historyFilter === '3p') return g.numPlayers === 3;
+    if (historyFilter === '4p') return g.numPlayers === 4;
+    return true;
+  });
+
+  let html = headerHtml;
+
+  if (gamesHistory.length === 0) {
+    html += '<div class="games-empty">Aucune partie terminée. Les parties seront sauvegardées automatiquement dans le cloud.</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  // Stats résumé
+  const totalGames = gamesHistory.length;
+  const winCount = {};
+  gamesHistory.forEach(g => {
+    winCount[g.winnerName] = (winCount[g.winnerName] || 0) + 1;
+  });
+  const topWinner = Object.entries(winCount).sort((a,b) => b[1]-a[1])[0];
+  const avgRounds = (gamesHistory.reduce((s,g) => s + g.roundCount, 0) / totalGames).toFixed(1);
+
+  html += `<div class="stats-summary">
+    <div class="stat-box">
+      <div class="stat-value">${totalGames}</div>
+      <div class="stat-label">PARTIES JOUÉES</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value">${escapeHtml(topWinner[0])}</div>
+      <div class="stat-label">PLUS DE VICTOIRES (${topWinner[1]})</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value">${avgRounds}</div>
+      <div class="stat-label">MANCHES / PARTIE (MOY.)</div>
+    </div>
+  </div>`;
+
+  // Filtres
+  html += `<div class="games-filter">
+    <button class="filter-chip ${historyFilter === 'all' ? 'active' : ''}" onclick="setHistoryFilter('all')">Toutes (${gamesHistory.length})</button>
+    <button class="filter-chip ${historyFilter === '2p' ? 'active' : ''}" onclick="setHistoryFilter('2p')">2 joueurs (${gamesHistory.filter(g=>g.numPlayers===2).length})</button>
+    <button class="filter-chip ${historyFilter === '3p' ? 'active' : ''}" onclick="setHistoryFilter('3p')">3 joueurs (${gamesHistory.filter(g=>g.numPlayers===3).length})</button>
+    <button class="filter-chip ${historyFilter === '4p' ? 'active' : ''}" onclick="setHistoryFilter('4p')">Équipes (${gamesHistory.filter(g=>g.numPlayers===4).length})</button>
+  </div>`;
+
+  if (filtered.length === 0) {
+    html += '<div class="games-empty">Aucune partie dans cette catégorie.</div>';
+  } else {
+    filtered.forEach(g => {
+      const date = new Date(g.date);
+      const dateStr = date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+      const timeStr = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      
+      // Affichage matchup : Équipe1 vs Équipe2 avec vainqueur mis en avant
+      const matchupParts = g.players.map((name, i) => {
+        const isWinner = i === g.winnerIdx;
+        return `<span class="${isWinner ? 'winner' : ''}">${escapeHtml(name)}</span>`;
+      });
+      const matchup = matchupParts.join('<span class="vs">vs</span>');
+      
+      // Scores
+      const scoresStr = g.players.map((name, i) => `${escapeHtml(name)} : ${g.scores[i]}`).join(' — ');
+      
+      const modeLabel = g.mode === 'teams' ? 'Équipes' : `${g.numPlayers} joueurs`;
+      
+      html += `<div class="game-entry is-winner-row">
+        <div>
+          <div class="game-date">${dateStr} · ${timeStr}</div>
+          <div class="game-matchup">${matchup}</div>
+          <div class="game-score">${scoresStr}</div>
+          <div class="game-meta">${modeLabel} · Objectif ${g.targetScore} pts · ${g.roundCount} manche${g.roundCount > 1 ? 's' : ''}</div>
+        </div>
+        <div class="game-actions">
+          <button class="scopa-btn" title="Supprimer cette partie" onclick="deleteGame('${g.id}')" style="color:var(--red);border-color:var(--red);">×</button>
+        </div>
+      </div>`;
+    });
+  }
+
+  el.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Init
+document.getElementById('startBtn').addEventListener('click', startGame);
+document.getElementById('resetBtn').addEventListener('click', resetAll);
+load();
+if (state.gameStarted) {
+  document.getElementById('numPlayers').value = state.players.length === 2 ? '2' : (state.players.length === 3 ? '3' : '4');
+  document.getElementById('targetScore').value = state.targetScore;
+}
+render();
+
+// Attendre que le SDK Firebase soit chargé avant de fetch
+function startFirebaseLoad() {
+  if (window._firebase) {
+    fetchGamesHistory();
+  } else {
+    window.addEventListener('firebase-sdk-ready', fetchGamesHistory, { once: true });
+    // Fallback si l'event a été dispatch avant l'attachement
+    setTimeout(() => {
+      if (window._firebase && gamesHistory.length === 0 && !historyLoading) fetchGamesHistory();
+    }, 1500);
+  }
+}
+startFirebaseLoad();
+</script>
+</body>
+</html>
